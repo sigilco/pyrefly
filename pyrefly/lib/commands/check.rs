@@ -340,6 +340,11 @@ struct OutputArgs {
     /// Format for pysa report output (json or capnp)
     #[arg(long, value_enum, default_value_t = report::pysa::PysaFormat::Capnp)]
     report_pysa_format: report::pysa::PysaFormat,
+    /// Export the inferred type of every expression in the Pysa report,
+    /// instead of only the expressions Pysa consumes (names, attribute
+    /// bases, and call arguments).
+    #[arg(long, requires = "report_pysa")]
+    report_pysa_all_expressions: bool,
     /// Report the cross-module demand tree (aggregated summary of LookupAnswer
     /// and LookupExport calls). Useful for analyzing laziness properties.
     #[arg(long, value_name = "OUTPUT_FILE")]
@@ -507,6 +512,7 @@ impl OutputArgs {
             glean_stdlib_root,
             report_pysa,
             report_pysa_format,
+            report_pysa_all_expressions,
             report_demand_tree,
             report_cinderx,
             cinderx_include_readable,
@@ -553,6 +559,7 @@ impl OutputArgs {
             || glean_stdlib_root.is_some()
             || report_pysa.is_some()
             || !matches!(report_pysa_format, report::pysa::PysaFormat::Capnp)
+            || *report_pysa_all_expressions
             || report_demand_tree.is_some()
             || report_cinderx.is_some()
             || *cinderx_include_readable
@@ -1878,6 +1885,7 @@ impl CheckArgs {
                 pysa_directory,
                 handles,
                 self.output.report_pysa_format,
+                self.output.report_pysa_all_expressions,
             )?;
             transaction.set_pysa_reporter(Some(reporter));
         }
@@ -2616,6 +2624,95 @@ def go(w: Widget) -> int:
         let facts = fs::read_to_string(&glean_files[0]).unwrap();
         assert!(facts.contains("public.api.Widget"));
         assert!(!facts.contains("main.Widget"));
+    }
+
+    /// The Pysa type-of-expression report only covers the expressions Pysa
+    /// consumes by default. Consumers that need the type of every expression
+    /// ask for it explicitly.
+    #[test]
+    fn check_pysa_report_exports_all_expressions_on_request() {
+        let temp = TempDir::new().unwrap();
+        let root = temp.path().join("project");
+        fs::create_dir(&root).unwrap();
+        let module = root.join("main.py");
+        fs::write(
+            &module,
+            "def add(a: int, b: int) -> int:\n    return a + b\n\ntotal = add(1, 2)\n",
+        )
+        .unwrap();
+
+        let locations = |dir: &Path| -> Vec<String> {
+            // The report also covers the modules the checked module depends on,
+            // so pick out the file for the module under test.
+            let entries: Vec<_> = fs::read_dir(dir.join("type_of_expressions"))
+                .expect("type_of_expressions directory should exist")
+                .map(|entry| entry.unwrap().path())
+                .filter(|path| {
+                    path.file_name()
+                        .and_then(|name| name.to_str())
+                        .is_some_and(|name| name.starts_with("main:"))
+                })
+                .collect();
+            assert_eq!(entries.len(), 1, "expected one file for the module");
+            let report = fs::read_to_string(&entries[0]).unwrap();
+            let report: serde_json::Value = serde_json::from_str(&report).unwrap();
+            let mut locations: Vec<String> = report["functions"]
+                .as_object()
+                .unwrap()
+                .values()
+                .flat_map(|function| {
+                    function["locations"]
+                        .as_object()
+                        .unwrap()
+                        .keys()
+                        .cloned()
+                })
+                .collect();
+            locations.sort();
+            locations
+        };
+
+        let default_dir = temp.path().join("pysa-default");
+        let all_dir = temp.path().join("pysa-all");
+        for (dir, extra_args) in [
+            (&default_dir, vec![]),
+            (&all_dir, vec!["--report-pysa-all-expressions"]),
+        ] {
+            let mut args = vec![
+                "check".to_owned(),
+                "--summary=none".to_owned(),
+                "--report-pysa".to_owned(),
+                dir.to_str().unwrap().to_owned(),
+                "--report-pysa-format".to_owned(),
+                "json".to_owned(),
+            ];
+            args.extend(extra_args.iter().map(|arg| (*arg).to_owned()));
+            let (status, errors, _) = CheckArgs::parse_from(args)
+                .run_once(
+                    "test",
+                    Box::new(TestIncludes {
+                        root: root.clone(),
+                        initial_files: vec![module.clone()],
+                    }),
+                    test_config_finder(&root),
+                    UpsellDecision::Skip,
+                    ThreadCount::Inline,
+                )
+                .unwrap();
+            assert!(errors.is_empty(), "unexpected type errors: {errors:#?}");
+            assert!(matches!(status, CommandExitStatus::Success));
+        }
+
+        let default_locations = locations(&default_dir);
+        let all_locations = locations(&all_dir);
+        assert!(
+            all_locations.len() > default_locations.len(),
+            "expected more locations, got {default_locations:?} and {all_locations:?}"
+        );
+        // The binary expression `a + b` is only reported in the all-expressions
+        // mode.
+        assert!(all_locations.contains(&"2:12-2:17".to_owned()));
+        assert!(!default_locations.contains(&"2:12-2:17".to_owned()));
     }
 
     #[test]
