@@ -74,6 +74,9 @@ struct TypeOfExpressionVisitor<'a> {
     module_context: &'a ModuleContext<'a>,
     current_function: Option<FunctionId>,
     result: HashMap<FunctionId, FunctionTypeOfExpressionsBuilder>,
+    /// Whether to export the type of every expression, rather than only the
+    /// expressions Pysa consumes.
+    all_expressions: bool,
 }
 
 impl<'a> TypeOfExpressionVisitor<'a> {
@@ -127,10 +130,13 @@ impl AstScopedVisitor for TypeOfExpressionVisitor<'_> {
         }
     }
 
-    /// We only export types for expressions that Pysa needs:
+    /// By default we only export types for expressions that Pysa needs:
     /// - `Expr::Name`: simple variable references (e.g. `x`)
     /// - `Expr::Attribute`: the base of an attribute access (e.g. type of `x` in `x.foo`)
     /// - `Expr::Call`: each positional and keyword argument
+    ///
+    /// When `all_expressions` is set, we export the type of every expression
+    /// instead, so that consumers can recover the type of any subexpression.
     fn visit_expression(
         &mut self,
         expr: &Expr,
@@ -138,6 +144,10 @@ impl AstScopedVisitor for TypeOfExpressionVisitor<'_> {
         _parent_expression: Option<&Expr>,
         _current_statement: Option<&ruff_python_ast::Stmt>,
     ) {
+        if self.all_expressions {
+            self.maybe_export_type(expr);
+            return;
+        }
         match expr {
             Expr::Name(_) => self.maybe_export_type(expr),
             Expr::Attribute(ExprAttribute { value, .. }) => self.maybe_export_type(value),
@@ -160,11 +170,13 @@ impl AstScopedVisitor for TypeOfExpressionVisitor<'_> {
 
 pub fn export_type_of_expressions(
     context: &ModuleContext,
+    all_expressions: bool,
 ) -> HashMap<FunctionId, FunctionTypeOfExpressions> {
     let mut visitor = TypeOfExpressionVisitor {
         module_context: context,
         current_function: None,
         result: HashMap::new(),
+        all_expressions,
     };
 
     visit_module_ast(&mut visitor, context);
