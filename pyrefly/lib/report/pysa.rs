@@ -220,6 +220,9 @@ pub struct PysaReporter {
     pub type_of_expressions_directory: PathBuf,
     pub call_graphs_directory: PathBuf,
     pub format: PysaFormat,
+    /// Whether `type_of_expressions` exports the type of every expression,
+    /// instead of only the expressions Pysa consumes.
+    pub all_expressions: bool,
 }
 
 impl PysaReporter {
@@ -228,6 +231,7 @@ impl PysaReporter {
         pysa_directory: &Path,
         handles: &[Handle],
         format: PysaFormat,
+        all_expressions: bool,
     ) -> anyhow::Result<Box<Self>> {
         tracing::debug!("Writing pysa results to `{}`", pysa_directory.display());
 
@@ -248,6 +252,7 @@ impl PysaReporter {
             type_of_expressions_directory,
             call_graphs_directory,
             format,
+            all_expressions,
         }))
     }
 
@@ -306,7 +311,8 @@ impl PysaReporter {
                     .expect("Failed to write definitions file"),
             }
 
-            let module_type_of_expressions = export_module_type_of_expressions(&context);
+            let module_type_of_expressions =
+                export_module_type_of_expressions(&context, self.all_expressions);
             let writer = BufWriter::new(
                 File::create(self.type_of_expressions_directory.join(info_filename))
                     .expect("Failed to create type_of_expressions file"),
@@ -380,8 +386,11 @@ pub fn export_module_definitions(
     }
 }
 
-pub fn export_module_type_of_expressions(context: &ModuleContext) -> PysaModuleTypeOfExpressions {
-    let functions = export_type_of_expressions(context);
+pub fn export_module_type_of_expressions(
+    context: &ModuleContext,
+    all_expressions: bool,
+) -> PysaModuleTypeOfExpressions {
+    let functions = export_type_of_expressions(context, all_expressions);
     PysaModuleTypeOfExpressions {
         format_version: 1,
         module_id: context.answers_context.module_id,

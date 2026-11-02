@@ -75,6 +75,12 @@ pub struct BuckCheckArgs {
     #[arg(long, value_enum, default_value_t = report::pysa::PysaFormat::Capnp)]
     report_pysa_format: report::pysa::PysaFormat,
 
+    /// Export the inferred type of every expression in the Pysa report,
+    /// instead of only the expressions Pysa consumes (names, attribute
+    /// bases, and call arguments).
+    #[arg(long, requires = "report_pysa")]
+    report_pysa_all_expressions: bool,
+
     /// Show a progress bar during type checking. Deprecated: use `--progress-bar=interactive` instead.
     #[arg(long, hide = true)]
     show_progress_bar: bool,
@@ -125,6 +131,7 @@ struct TypeCheckOptions<'a> {
     preset: Option<Preset>,
     report_pysa: Option<&'a Path>,
     report_pysa_format: report::pysa::PysaFormat,
+    report_pysa_all_expressions: bool,
     progress_bar_style: ProgressBarStyle,
     include_suppressed: bool,
 }
@@ -194,6 +201,7 @@ fn compute_errors(
             pysa_directory,
             &modules_to_check,
             options.report_pysa_format,
+            options.report_pysa_all_expressions,
         )?;
         transaction.as_mut().set_pysa_reporter(Some(reporter));
     }
@@ -356,6 +364,7 @@ impl BuckCheckArgs {
                 preset: self.preset,
                 report_pysa: self.report_pysa.as_deref(),
                 report_pysa_format: self.report_pysa_format,
+                report_pysa_all_expressions: self.report_pysa_all_expressions,
                 progress_bar_style: self.progress_bar_style(),
                 include_suppressed: self.include_suppressed,
             },
@@ -423,6 +432,7 @@ mod tests {
                 preset,
                 report_pysa: None,
                 report_pysa_format: report::pysa::PysaFormat::Capnp,
+                report_pysa_all_expressions: false,
                 progress_bar_style: ProgressBarStyle::No,
                 include_suppressed: false,
             },
